@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Any
+import warnings
 
 import networkx as nx
 import numpy as np
@@ -172,6 +173,9 @@ def _layered_bn_like(
 
 
 def benchmark_bn_instances() -> list[GraphInstance]:
+    canonical = load_pgmpy_bn_instances()
+    if canonical:
+        return canonical
     return [
         asia_moralized(),
         _layered_bn_like("child_like", [3, 5, 6, 6], 2, 101, [2, 2, 3, 4]),
@@ -179,6 +183,64 @@ def benchmark_bn_instances() -> list[GraphInstance]:
         _layered_bn_like("insurance_like", [4, 7, 8, 8, 6], 3, 103, [2, 3, 4, 5]),
         _layered_bn_like("hailfinder_like", [6, 10, 14, 12, 10, 6], 3, 104, [2, 3, 4, 5]),
     ]
+
+
+def load_pgmpy_bn_instances() -> list[GraphInstance]:
+    """Load canonical pgmpy example Bayesian networks when available."""
+    loaders = []
+    try:
+        from pgmpy.example_models import load_model
+        loaders.append(load_model)
+    except Exception:
+        pass
+    try:
+        from pgmpy.utils import get_example_model
+        loaders.append(get_example_model)
+    except Exception:
+        pass
+    if not loaders:
+        return []
+
+    instances: list[GraphInstance] = []
+    for name in ["asia", "alarm", "child", "insurance", "hailfinder"]:
+        model = None
+        for loader in loaders:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", FutureWarning)
+                    model = loader(name)
+                break
+            except Exception:
+                continue
+        if model is None:
+            continue
+        try:
+            dag = nx.DiGraph()
+            dag.add_nodes_from(model.nodes())
+            dag.add_edges_from(model.edges())
+            graph = moralize_dag(dag)
+            cardinalities = {node: 2 for node in graph.nodes}
+            for cpd in model.get_cpds():
+                variable = getattr(cpd, "variable", None)
+                variable_card = getattr(cpd, "variable_card", None)
+                if variable is not None and variable_card is not None:
+                    cardinalities[variable] = int(variable_card)
+            instances.append(
+                GraphInstance(
+                    name=f"pgmpy_{name}",
+                    topology="moralized_bn",
+                    graph=graph,
+                    cardinalities=cardinalities,
+                    metadata={
+                        "source": "pgmpy_example_model",
+                        "benchmark": name,
+                        "cardinality_mode": "bn_native",
+                    },
+                )
+            )
+        except Exception:
+            continue
+    return instances
 
 
 def make_experiment_instances() -> list[GraphInstance]:
@@ -279,4 +341,3 @@ def make_experiment_instances() -> list[GraphInstance]:
 
     instances.extend(benchmark_bn_instances())
     return instances
-

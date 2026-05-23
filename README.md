@@ -28,9 +28,22 @@ python scripts/write_report.py
 latexmk -pdf -interaction=nonstopmode -halt-on-error report/results_report.tex
 ```
 
+For the expanded v2 experiment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python scripts/run_experiments_v2.py
+python scripts/make_plots_v2.py
+python scripts/write_report_v2.py
+latexmk -pdf -interaction=nonstopmode -halt-on-error report/results_report_v2.tex
+```
+
 Generated artifacts:
 
 - `results/results.csv`
 - `figures/*.pdf`
 - `report/results_report.pdf`
-
+- `results/results_v2.csv`
+- `report/results_report_v2.pdf`

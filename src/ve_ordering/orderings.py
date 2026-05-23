@@ -61,6 +61,84 @@ def hybrid_score(
     return immediate + lambda_ * pressure
 
 
+def fill_pressure_score(
+    graph: nx.Graph,
+    node: object,
+    cardinalities: Cardinalities,
+    lambda_: float,
+) -> float:
+    """Weighted min-fill plus pressure only around newly created fill edges.
+
+    This avoids penalizing a whole high-degree neighborhood when eliminating a
+    variable creates little or no new structure. The intent is to make the proxy
+    less brittle on hub-dominated graphs than the original degree-squared term.
+    """
+    immediate = weighted_fill_score(graph, node, cardinalities)
+    new_edges = fill_edges(graph, node)
+    if not new_edges:
+        return immediate
+
+    added_degree = {u: 0 for edge in new_edges for u in edge}
+    for u, w in new_edges:
+        added_degree[u] += 1
+        added_degree[w] += 1
+
+    pressure = 0.0
+    for u, w in new_edges:
+        edge_weight = math.log(cardinalities[u] * cardinalities[w])
+        u_after = graph.degree[u] - 1 + added_degree[u]
+        w_after = graph.degree[w] - 1 + added_degree[w]
+        pressure += edge_weight * (u_after + w_after)
+    pressure /= max(1, len(new_edges))
+    return immediate + lambda_ * pressure
+
+
+def _local_factor_log10(
+    graph: nx.Graph, node: object, cardinalities: Cardinalities
+) -> float:
+    return sum(
+        math.log10(cardinalities[u]) for u in [node, *list(graph.neighbors(node))]
+    )
+
+
+def next_step_pressure(
+    graph_after: nx.Graph,
+    cardinalities: Cardinalities,
+    next_candidate_limit: int = 5,
+) -> float:
+    """Cheap proxy for the best next elimination cost after a candidate move."""
+    if not graph_after.nodes:
+        return 0.0
+    candidates = sorted(
+        graph_after.nodes,
+        key=lambda u: (
+            weighted_fill_score(graph_after, u, cardinalities),
+            _local_factor_log10(graph_after, u, cardinalities),
+            _node_key(u),
+        ),
+    )[:next_candidate_limit]
+    next_costs = []
+    for candidate in candidates:
+        next_costs.append(
+            weighted_fill_score(graph_after, candidate, cardinalities)
+            + _local_factor_log10(graph_after, candidate, cardinalities)
+        )
+    return min(next_costs)
+
+
+def next_step_score(
+    graph: nx.Graph,
+    node: object,
+    cardinalities: Cardinalities,
+    lambda_: float,
+) -> float:
+    """Weighted min-fill with a one-step simulated downstream objective."""
+    immediate = weighted_fill_score(graph, node, cardinalities)
+    work = graph.copy()
+    _eliminate_in_place(work, node)
+    return immediate + lambda_ * next_step_pressure(work, cardinalities)
+
+
 def _eliminate_in_place(graph: nx.Graph, node: object) -> None:
     graph.add_edges_from(fill_edges(graph, node))
     graph.remove_node(node)
@@ -74,6 +152,30 @@ def _greedy_order(
     order: list[object] = []
     while work.nodes:
         best = min(work.nodes, key=lambda node: (score_fn(work, node), _node_key(node)))
+        order.append(best)
+        _eliminate_in_place(work, best)
+    return order
+
+
+def _limited_candidate_order(
+    graph: nx.Graph,
+    cardinalities: Cardinalities,
+    score_fn: Callable[[nx.Graph, object], tuple[float, ...]],
+    candidate_limit: int = 12,
+) -> list[object]:
+    """Greedy order that evaluates expensive scores on top WMF candidates."""
+    work = graph.copy()
+    order: list[object] = []
+    while work.nodes:
+        candidates = sorted(
+            work.nodes,
+            key=lambda node: (
+                weighted_fill_score(work, node, cardinalities),
+                len(fill_edges(work, node)),
+                _node_key(node),
+            ),
+        )[:candidate_limit]
+        best = min(candidates, key=lambda node: (score_fn(work, node), _node_key(node)))
         order.append(best)
         _eliminate_in_place(work, best)
     return order
@@ -101,6 +203,66 @@ def hybrid_order(
     return _greedy_order(
         graph, lambda g, v: (hybrid_score(g, v, cardinalities, lambda_),)
     )
+
+
+def fill_pressure_order(
+    graph: nx.Graph, cardinalities: Cardinalities, lambda_: float
+) -> list[object]:
+    return _greedy_order(
+        graph, lambda g, v: (fill_pressure_score(g, v, cardinalities, lambda_),)
+    )
+
+
+def next_step_order(
+    graph: nx.Graph, cardinalities: Cardinalities, lambda_: float
+) -> list[object]:
+    return _limited_candidate_order(
+        graph,
+        cardinalities,
+        lambda g, v: (next_step_score(g, v, cardinalities, lambda_),),
+        candidate_limit=8,
+    )
+
+
+def adaptive_lambda(graph: nx.Graph) -> float:
+    """Simple topology-aware lambda chosen from graph statistics only."""
+    n = graph.number_of_nodes()
+    if n <= 2 or nx.is_forest(graph):
+        return 0.0
+    m = graph.number_of_edges()
+    density = 0.0 if n <= 1 else 2.0 * m / (n * (n - 1))
+    degrees = [degree for _, degree in graph.degree()]
+    avg_degree = sum(degrees) / len(degrees)
+    max_degree = max(degrees)
+    heterogeneity = max_degree / max(1e-9, avg_degree)
+    clustering = nx.average_clustering(graph) if n <= 400 else 0.0
+
+    if heterogeneity >= 3.5:
+        return 0.0
+    if max_degree <= 4 and avg_degree >= 2.4 and clustering < 0.05:
+        return 0.5
+    if density >= 0.10 or clustering >= 0.20:
+        return 0.01
+    return 0.05
+
+
+def adaptive_fill_pressure_order(
+    graph: nx.Graph, cardinalities: Cardinalities
+) -> list[object]:
+    work = graph.copy()
+    order: list[object] = []
+    while work.nodes:
+        lambda_ = adaptive_lambda(work)
+        best = min(
+            work.nodes,
+            key=lambda node: (
+                fill_pressure_score(work, node, cardinalities, lambda_),
+                _node_key(node),
+            ),
+        )
+        order.append(best)
+        _eliminate_in_place(work, best)
+    return order
 
 
 def _graph_signature(graph: nx.Graph) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
@@ -249,6 +411,12 @@ def get_order(
         return weighted_min_fill_order(graph, cardinalities)
     if method == "hybrid":
         return hybrid_order(graph, cardinalities, lambda_)
+    if method == "fill_pressure":
+        return fill_pressure_order(graph, cardinalities, lambda_)
+    if method == "next_step":
+        return next_step_order(graph, cardinalities, lambda_)
+    if method == "adaptive_fill_pressure":
+        return adaptive_fill_pressure_order(graph, cardinalities)
     if method == "bounded_lookahead":
         return bounded_lookahead_order(
             graph,
@@ -256,4 +424,3 @@ def get_order(
             depth=2 if lookahead_depth is None else lookahead_depth,
         )
     raise ValueError(f"unknown ordering method: {method}")
-

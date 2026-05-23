@@ -110,10 +110,24 @@ Moralized BN & 0.00 & 3.36 \\
 \item The hybrid heuristic helped on some topology groups but did not dominate weighted min-fill uniformly, which is a useful empirical finding. The downstream-pressure proxy can capture some lookahead signal, but its benefit depends on graph structure and the chosen $\lambda$.
 \end{itemize}
 
+\section*{Implications}
+The main implication is that ordering heuristics should not be evaluated only by aggregate averages. The same downstream-pressure idea that gives a modest gain on grid-like structure can be neutral or harmful on hub-dominated graphs. This supports the project hypothesis that topology matters, but it weakens the claim that a single fixed hybrid score is universally better than weighted min-fill. A more defensible conclusion is that degree-based lookahead is a useful ingredient, not a complete replacement for strong greedy baselines.
+
+The runtime results also reinforce why structural metrics are the right primary evidence. Explicit factor operations were skipped for many high-width orders because estimated factor tables exceeded the cutoff, while induced width and peak factor estimates remained available for every run.
+
 \section*{Bounded Lookahead Check}
 The bounded-lookahead oracle was run only on small graphs; it produced 5 successful rows. This keeps the comparison computationally feasible while still giving a reference point for how much a more explicit lookahead objective can improve structural metrics.
 
 \section*{Limitations}
-This run is self-contained and reproducible, but the BN benchmark portion should be strengthened in a future pass by loading canonical BIF/UAI networks directly through \texttt{pgmpy} or \texttt{pyAgrum}. The current report also treats exact VE runtime as secondary evidence because structural complexity, especially peak factor size, is the more stable measure across high-treewidth instances.
+This run is self-contained and reproducible, but the BN benchmark portion should be strengthened in a future pass by loading canonical BIF/UAI networks directly through \texttt{pgmpy} or \texttt{pyAgrum}. The current moralized-BN group includes a manual Asia graph and BN-like layered DAGs, so its conclusions are less authoritative than the synthetic topology comparisons. The original hybrid pressure term is also coarse: it penalizes all high-degree neighbors, even when the actual fill-in edges are limited. Finally, exact VE runtime is secondary evidence because many high-treewidth instances are structurally infeasible before implementation details matter.
+
+\section*{Next Steps}
+\begin{itemize}
+\item Load canonical BN benchmarks and preserve their native cardinalities.
+\item Replace the original degree-squared pressure with a fill-edge-local pressure term and a cheap one-step lookahead diagnostic.
+\item Add an adaptive $\lambda$ rule based on graph statistics such as density, degree heterogeneity, and grid-like degree profiles.
+\item Expand the bounded-lookahead oracle on small pilot graphs to measure how much signal the cheap proxy captures.
+\item Add failure-case analysis, especially for scale-free graphs where the original hybrid score can be worse than weighted min-fill.
+\end{itemize}
 
 \end{document}
